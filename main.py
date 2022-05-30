@@ -8,15 +8,14 @@ np.set_printoptions(threshold=sys.maxsize)
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
-
 df = pd.read_csv('dataset.csv')
 torch.set_printoptions(threshold=10_000)
 
 # Dropping useless features and separate labels from data
-data = df.drop(columns=['Class','PathOrder'])
+data = df.drop(columns=['Class','PathOrder','Time(s)'])
 label = df.Class.to_numpy()
 print("the dataset has shape: ", data.shape)
-
+print("the labels has shape: ", label.shape)
 print("nan count in data", data.isnull().values.any())
 
 # Normalize each column(feature) of the dataframe 
@@ -53,20 +52,24 @@ print("encoded label are of type: ", type(label_encoded_tensor), "shape: ", labe
 # At this point I have the normalized dataframe and the encoded labels in a tensor format 
 # I need to create a windowed tensor with window_size 
 
-window_size = 32 
-step = int(window_size/2)
+window_size = 16 
+step = int(window_size//2)
+size = len(range(0,len(data_buffer)-step+1,step))-1
+print(size)
 
-data_norm_tensor_win = torch.empty((len(range(0,len(data_buffer)-step,step)),window_size,data.shape[1]), dtype=torch.float32)
-label_encoded_tensor_win = torch.empty((len(range(0,len(label_encoded_tensor)-step,step)),window_size,10), dtype=torch.float32)
+data_norm_tensor_win = torch.empty(size,window_size,data.shape[1], dtype=torch.float32)
+label_encoded_tensor_win = torch.empty(size,window_size,10, dtype=torch.float32)
 
 
 counter = 0
-for i in range(0,len(data_buffer)-2*step,step):  
-    data_norm_tensor_win[counter] = data_norm_tensor[i:i+window_size][:]
-    label_encoded_tensor_win[counter] = label_encoded_tensor[i:i+window_size][:]
-    
-    counter=counter+1      
+for i in range(0,len(data_buffer)-step,step):
+    if(counter<size):
+        data_norm_tensor_win[counter] = data_norm_tensor[i:i+window_size][:]
+        label_encoded_tensor_win[counter] = label_encoded_tensor[i:i+window_size][:]
+        counter=counter+1      
 
+#data_norm_tensor_win = data_norm_tensor_win[:]    
+    
 print("data normalized and windowed are of type: ", type(data_norm_tensor_win), "shape: ", data_norm_tensor_win.size())    
 print("label normalized and windowed are of type: ", type(label_encoded_tensor_win), "shape: ", label_encoded_tensor_win.size())    
 
@@ -76,6 +79,11 @@ print("label normalized and windowed are of type: ", type(label_encoded_tensor_w
 # data_norm_tensor_win -> data
 # label_encoded_tensor_win -> label
 
+
+torch.nan_to_num(data_norm_tensor_win)
+print(torch.isnan(data_norm_tensor_win).any())
+torch.isnan(data_norm_tensor_win)
+print(" d",torch.isnan(data_norm_tensor_win.view(-1)).sum().item()==0)
 
 class CustomDataset(torch.utils.data.Dataset):
     def __init__(self, data, labels):
@@ -106,13 +114,12 @@ test_loader = torch.utils.data.DataLoader(dataset=test_dataset,
                                           shuffle=False)
 
 
-
 torch.autograd.set_detect_anomaly(True)
 class NEURAL(torch.nn.Module):
     
     def __init__(self):
         super(NEURAL, self).__init__()
-        self.lstm1 = torch.nn.LSTM(52, 160, 1,dropout = 0.5,batch_first = False)
+        self.lstm1 = torch.nn.LSTM(51, 160, 1,dropout = 0.5,batch_first = False)
         self.lstm2 = torch.nn.LSTM(160, 200, 1,dropout = 0.5)
         self.fc = torch.nn.Linear(200, 10)
         self.sigmoid = torch.nn.Sigmoid()
@@ -160,7 +167,7 @@ print(model)
 learning_rate = 1e-4
 num_epochs = 500
 
-criterion = torch.nn.CrossEntropyLoss()
+criterion = torch.nn.MSELoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
 train_losses = []
@@ -180,6 +187,7 @@ for epoch in range(num_epochs):
         #print("labels",labels.shape)
         # Calculate Loss: softmax --> cross entropy loss
         loss = criterion(outputs, labels)
+        #loss = torch.nn.NLLLoss()(torch.log(outputs), labels)  
         optimizer.zero_grad()
 
         # Getting gradients w.r.t. parameters
@@ -195,4 +203,3 @@ for epoch in range(num_epochs):
             print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                 epoch, i * len(data), len(train_loader.dataset),
                 100. * i / len(train_loader), loss.item()))
-
