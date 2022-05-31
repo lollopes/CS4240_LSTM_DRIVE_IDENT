@@ -11,6 +11,20 @@ import matplotlib.pyplot as plt
 df = pd.read_csv('dataset.csv')
 torch.set_printoptions(threshold=10_000)
 
+if torch.cuda.is_available():
+    device = "cuda:0"
+    print("+++++++++++++++++++++++++++++++++++++++++++++gpu available")
+
+torch.cuda.empty_cache()
+
+
+def to_device(data, device):
+    """Move tensor(s) to chosen device"""
+    if isinstance(data, (list,tuple)):
+        return [to_device(x, device) for x in data]
+    return data.to(device, non_blocking=True)
+	
+
 # Dropping useless features and separate labels from data
 data = df.drop(columns=['Class','PathOrder','Time(s)'])
 label = df.Class.to_numpy()
@@ -46,7 +60,7 @@ print("data tensor are of type: ", type(data_norm_tensor), "shape: ", data_norm_
 #One-Hot Encode the label column of dataframe and keep it as a pytorch vector    
 targets = preprocessing.LabelEncoder().fit_transform(label)
 targets = torch.as_tensor(targets)
-label_encoded_tensor = torch.nn.functional.one_hot(targets, num_classes = 10)
+label_encoded_tensor = torch.nn.functional.one_hot(targets.to(torch.int64), num_classes = 10)
 print("encoded label are of type: ", type(label_encoded_tensor), "shape: ", label_encoded_tensor.size())
 
 # At this point I have the normalized dataframe and the encoded labels in a tensor format 
@@ -114,6 +128,23 @@ test_loader = torch.utils.data.DataLoader(dataset=test_dataset,
                                           shuffle=False)
 
 
+
+class DeviceDataLoader():
+    def __init__(self,dl,device):
+        self.dl = dl
+        self.device = device
+    def __iter__(self):
+        for b in self.dl:
+            yield to_device(b, self.device)
+    def __len__(self):
+        return len(self.dl)
+
+
+train_loader = DeviceDataLoader(train_loader,device)
+test_loader = DeviceDataLoader(test_loader,device)
+
+
+
 torch.autograd.set_detect_anomaly(True)
 class NEURAL(torch.nn.Module):
     
@@ -121,7 +152,7 @@ class NEURAL(torch.nn.Module):
         super(NEURAL, self).__init__()
         self.lstm1 = torch.nn.LSTM(51, 160, 1,dropout = 0.5,batch_first = False)
         self.lstm2 = torch.nn.LSTM(160, 200, 1,dropout = 0.5)
-        self.fc = torch.nn.Linear(200, 10)
+        self.fc = torch.nn.Linear(16, 10)
         self.sigmoid = torch.nn.Sigmoid()
         self.logsoftmax=torch.nn.LogSoftmax()
        
@@ -136,10 +167,10 @@ class NEURAL(torch.nn.Module):
             x = torch.nan_to_num(x,nan=0.0)
             
         #print("is nan x", x.isnan().any() ) 
-        h_t1 = Variable(torch.zeros(1, x.size()[1], 160))
-        c_t1 = Variable(torch.zeros(1, x.size()[1], 160))
-        h_t2 = Variable(torch.zeros(1, x.size()[1], 200))
-        c_t2 = Variable(torch.zeros(1, x.size()[1], 200))
+        h_t1 = Variable(torch.zeros(1, x.size()[1], 160,device=device))
+        c_t1 = Variable(torch.zeros(1, x.size()[1], 160,device=device))
+        h_t2 = Variable(torch.zeros(1, x.size()[1], 200,device=device))
+        c_t2 = Variable(torch.zeros(1, x.size()[1], 200,device=device))
         
         h1, (h_t1, c_t1) = self.lstm1(x, (h_t1, c_t1))
         
@@ -154,7 +185,7 @@ class NEURAL(torch.nn.Module):
         # Propagate input through LSTM
 
 
-        h3 = self.fc(h2)
+        h3 = self.fc(h2[:,:,-1])
         #print("is nan h3", h3.isnan().any() ) 
         h4 = self.sigmoid(h3)
         #print("is nan h4", h4.isnan().any() ) 
@@ -164,16 +195,22 @@ class NEURAL(torch.nn.Module):
 model = NEURAL()
 print(model)
 
+to_device(model,device)
+
 learning_rate = 1e-4
-num_epochs = 500
+num_epochs = 5000
 
-criterion = torch.nn.MSELoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+criterion = torch.nn.BCELoss()
+optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
+lambda1 = lambda epoch: 0.65 ** epoch
+scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,lr_lambda=lambda1)
 
-train_losses = []
+#train_losses = []
+
 for epoch in range(num_epochs):
     for i, (data, labels) in enumerate(train_loader):
         
+        #data, labels = data.to(device), labels.to(device)
         data = data.requires_grad_()
        # print("data",data)
 
@@ -186,8 +223,9 @@ for epoch in range(num_epochs):
         #print("outputs",outputs.shape)
         #print("labels",labels.shape)
         # Calculate Loss: softmax --> cross entropy loss
-        loss = criterion(outputs, labels)
-        #loss = torch.nn.NLLLoss()(torch.log(outputs), labels)  
+        #loss = torch.nn.functional.binary_cross_entropy_with_logits(outputs, labels)
+        #loss = torch.nn.NLLLoss(outputs, labels)  
+        loss = criterion(outputs, labels[:,-1,:])
         optimizer.zero_grad()
 
         # Getting gradients w.r.t. parameters
@@ -197,9 +235,11 @@ for epoch in range(num_epochs):
         # Updating parameters
         optimizer.step()
 
-        train_losses.append(loss)
+        #train_losses.append(loss)
         
         if i % 10 == 0:
-            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                epoch, i * len(data), len(train_loader.dataset),
-                100. * i / len(train_loader), loss.item()))
+            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f} \tLR: {:.8f}'.format(
+                epoch, i * len(data), len(train_loader),
+                100. * i / len(train_loader), loss.item(),optimizer.param_groups[0]["lr"]))
+    #scheduler.step()
+    torch.cuda.empty_cache()
