@@ -265,8 +265,15 @@ for epoch in range(num_epochs):
 
 inputs, classes = next(iter(train_loader))
 
-out = model(inputs)
-print(out)
-for element in out:
-    print(torch.argmax(element))
-print(classes)
+model.eval()
+test_loss = 0
+correct = 0
+with torch.no_grad():
+    for i, (data, labels) in enumerate(test_loader):
+        outputs = model(data)
+        test_loss += criterion(outputs, labels).item()
+        pred = outputs.data.max(1, keepdim=True)[1] 
+        correct += pred.eq(labels.data.view_as(pred)).cpu().sum()
+
+test_loss /= len(test_loader.dataset)
+100. * correct / len(test_loader.dataset)
