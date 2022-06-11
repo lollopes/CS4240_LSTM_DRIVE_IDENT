@@ -192,29 +192,24 @@ class NEURAL(torch.nn.Module):
     def __init__(self, batch_size, window_size, num_features):
         super(NEURAL, self).__init__()
         self.lstm1 = torch.nn.LSTM(num_features, 160,batch_first = True)
-        self.lstm2 = torch.nn.LSTM(160, 200, 1)    
-        # I need to get the output of last hidden layer 
-        # What size is it DONT KNOW
-        self.fc = torch.nn.Linear(16, 10)
-        self.sigmoid = torch.nn.Sigmoid()
+        self.bn1 = torch.nn.BatchNorm1d(16)
+        self.lstm2 = torch.nn.LSTM(160, 200, 1)
+        self.bn2 = torch.nn.BatchNorm1d(16)       
+        self.fc = torch.nn.Linear(200, 10)
+        self.sigmoid = torch.nn.Softmax()
         
     def forward(self, x):
 
-        lstm1_out, (h_t1, c_t1) = self.lstm1(x) 
-        #print("shape of lstm1 is: ",lstm1_out.shape)
-        #print("shape of lstm1 h is: ",h_t1.shape)        
-        #print("shape of lstm1 c is: ",c_t1.shape)   
-        
-        lstm2_out, (h_t2, c_t2) = self.lstm2(lstm1_out)      
-        #print("shape of lstm2 is: ",lstm2_out.shape)
-        #print("shape of lstm2 h is: ",h_t2.shape)        
-        #print("shape of lstm2 c is: ",c_t2.shape)
-        #print("shape of lstm2 c is: ",h_t2[:,:,-1].shape)
-              
-        fc_out = self.fc(lstm2_out[:,:,-1])
+        lstm1_out, (h_t1, c_t1) = self.lstm1(x)  
+        self.bn1(lstm1_out)
+        lstm2_out, (h_t2, c_t2) = self.lstm2(lstm1_out)  
+        self.bn2(lstm2_out)
+        fc_out = self.fc(lstm2_out)
         out = self.sigmoid(fc_out)
+        
+        #import pdb; pdb.set_trace()
 
-        return out
+        return out[:,-1,:]
     
     
 inputs, classes = next(iter(train_loader)) 
@@ -225,7 +220,7 @@ to_device(model,device)
 learning_rate = 1e-4
 num_epochs = 500
 
-criterion = torch.nn.CrossEntropyLoss()
+criterion = torch.nn.NLLLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 lambda1 = lambda epoch: 0.5 ** epoch
 scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda1)
@@ -241,7 +236,7 @@ def train_one_epoch():
         # Make predictions for this batch
         outputs = model(data)
         # Compute the loss and its gradients
-        loss = criterion(outputs,labels)
+        loss = criterion(torch.log(outputs),labels)
         loss.backward()
         
         # Compute the loss and its gradients
@@ -268,3 +263,10 @@ for epoch in range(num_epochs):
 
     epoch_number += 1
 
+inputs, classes = next(iter(train_loader))
+
+out = model(inputs)
+print(out)
+for element in out:
+    print(torch.argmax(element))
+print(classes)
